@@ -1,0 +1,57 @@
+[
+  {
+    "id": "finance-stock-data",
+    "name": "Stock Market Data",
+    "description": "Historical stock price data for major tech companies",
+    "domain": "finance",
+    "rows": 1258,
+    "columns": 7,
+    "file_path": "finance/stock_data.csv",
+    "preview_url": "/api/datasets/samples/finance-stock-data/preview",
+    "tags": ["finance", "stocks", "time-series"]
+  },
+  {
+    "id": "healthcare-patient-data",
+    "name": "Patient Health Records",
+    "description": "Anonymized patient health metrics and outcomes",
+    "domain": "healthcare",
+    "rows": 2500,
+    "columns": 12,
+    "file_path": "healthcare/patient_data.csv",
+    "preview_url": "/api/datasets/samples/healthcare-patient-data/preview",
+    "tags": ["healthcare", "medical", "classification"]
+  },
+  {
+    "id": "marketing-campaign-results",
+    "name": "Marketing Campaign Results",
+    "description": "Results from various marketing campaigns with customer demographics",
+    "domain": "marketing",
+    "rows": 1000,
+    "columns": 15,
+    "file_path": "marketing/campaign_results.csv",
+    "preview_url": "/api/datasets/samples/marketing-campaign-results/preview",
+    "tags": ["marketing", "customer", "analytics"]
+  },
+  {
+    "id": "ecommerce-sales-data",
+    "name": "E-commerce Sales Data",
+    "description": "Online retail sales transactions with product and customer information",
+    "domain": "ecommerce",
+    "rows": 5000,
+    "columns": 10,
+    "file_path": "ecommerce/sales_data.csv",
+    "preview_url": "/api/datasets/samples/ecommerce-sales-data/preview",
+    "tags": ["ecommerce", "sales", "retail"]
+  },
+  {
+    "id": "environmental-climate-data",
+    "name": "Climate Measurements",
+    "description": "Temperature, precipitation, and other climate metrics from global stations",
+    "domain": "environmental",
+    "rows": 3650,
+    "columns": 8,
+    "file_path": "environmental/climate_data.csv",
+    "preview_url": "/api/datasets/samples/environmental-climate-data/preview",
+    "tags": ["environmental", "climate", "time-series"]
+  }
+]

@@ -1,0 +1,226 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Existing models from the database
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  name         String
+  password_hash String
+  created_at   DateTime      @default(now()) @db.Timestamptz
+  updated_at   DateTime      @default(now()) @db.Timestamptz
+  projects     Project[]
+  user_progress UserProgress[]
+  learning_paths_progress LearningPathProgress[]
+
+  @@map("users")
+}
+
+model Project {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  user_id     Int
+  created_at  DateTime  @default(now()) @db.Timestamptz
+  updated_at  DateTime  @default(now()) @db.Timestamptz
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("projects")
+}
+
+// Educational content models
+model ConceptExplanation {
+  id               Int      @id @default(autoincrement())
+  title            String
+  content          String
+  summary          String
+  related_concepts String[]
+  prerequisites    String[]
+  difficulty       String
+  visual_aids      Json
+  category         String
+  tags             String[]
+  created_at       DateTime @default(now()) @db.Timestamptz
+  updated_at       DateTime @default(now()) @db.Timestamptz
+  user_progress    UserProgress[]
+
+  @@map("concept_explanations")
+}
+
+model Tutorial {
+  id                   Int      @id @default(autoincrement())
+  title                String
+  description          String
+  summary              String
+  learning_objectives  String[]
+  prerequisites        String[]
+  estimated_time       Int
+  difficulty           String
+  category             String
+  tags                 String[]
+  completion_certificate Boolean @default(true)
+  created_at           DateTime @default(now()) @db.Timestamptz
+  updated_at           DateTime @default(now()) @db.Timestamptz
+  steps                TutorialStep[]
+  exercises            Exercise[]
+  quiz_questions       QuizQuestion[]
+  user_progress        UserProgress[]
+
+  @@map("tutorials")
+}
+
+model TutorialStep {
+  id             Int      @id @default(autoincrement())
+  tutorial_id    Int
+  title          String
+  content        String
+  code           String?
+  visual_aids    Json?
+  estimated_time Int?
+  checkpoint     Boolean? @default(false)
+  order          Int
+  created_at     DateTime @default(now()) @db.Timestamptz
+  updated_at     DateTime @default(now()) @db.Timestamptz
+  tutorial       Tutorial @relation(fields: [tutorial_id], references: [id], onDelete: Cascade)
+
+  @@map("tutorial_steps")
+}
+
+model Exercise {
+  id              Int      @id @default(autoincrement())
+  tutorial_id     Int
+  title           String
+  description     String
+  instructions    String
+  starter_code    String?
+  solution_code   String
+  validation_tests String
+  hints           String[]
+  difficulty      String
+  created_at      DateTime @default(now()) @db.Timestamptz
+  updated_at      DateTime @default(now()) @db.Timestamptz
+  tutorial        Tutorial @relation(fields: [tutorial_id], references: [id], onDelete: Cascade)
+  user_solutions  UserSolution[]
+
+  @@map("exercises")
+}
+
+model QuizQuestion {
+  id             Int      @id @default(autoincrement())
+  tutorial_id    Int
+  question       String
+  options        String[]
+  correct_answer Int
+  explanation    String
+  created_at     DateTime @default(now()) @db.Timestamptz
+  updated_at     DateTime @default(now()) @db.Timestamptz
+  tutorial       Tutorial @relation(fields: [tutorial_id], references: [id], onDelete: Cascade)
+  user_answers   UserQuizAnswer[]
+
+  @@map("quiz_questions")
+}
+
+model LearningPath {
+  id               Int      @id @default(autoincrement())
+  title            String
+  description      String
+  difficulty       String
+  estimated_time   Int
+  prerequisites    String[]
+  created_at       DateTime @default(now()) @db.Timestamptz
+  updated_at       DateTime @default(now()) @db.Timestamptz
+  learning_path_items LearningPathItem[]
+  learning_paths_progress LearningPathProgress[]
+
+  @@map("learning_paths")
+}
+
+model LearningPathItem {
+  id               Int      @id @default(autoincrement())
+  learning_path_id Int
+  item_type        String   // "concept", "tutorial"
+  item_id          Int
+  order            Int
+  required         Boolean  @default(true)
+  created_at       DateTime @default(now()) @db.Timestamptz
+  updated_at       DateTime @default(now()) @db.Timestamptz
+  learning_path    LearningPath @relation(fields: [learning_path_id], references: [id], onDelete: Cascade)
+
+  @@map("learning_path_items")
+}
+
+// User progress tracking models
+model UserProgress {
+  id                  Int      @id @default(autoincrement())
+  user_id             Int
+  content_type        String   // "concept", "tutorial"
+  content_id          Int
+  progress_percentage Int      @default(0)
+  completed           Boolean  @default(false)
+  last_accessed       DateTime @default(now()) @db.Timestamptz
+  created_at          DateTime @default(now()) @db.Timestamptz
+  updated_at          DateTime @default(now()) @db.Timestamptz
+  user                User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // We need to use separate fields for concept and tutorial relations
+  // to avoid constraint name conflicts
+  concept_id          Int?
+  tutorial_id         Int?
+  concept             ConceptExplanation? @relation(fields: [concept_id], references: [id], onDelete: SetNull)
+  tutorial            Tutorial? @relation(fields: [tutorial_id], references: [id], onDelete: SetNull)
+
+  @@unique([user_id, content_type, content_id])
+  @@map("user_progress")
+}
+
+model LearningPathProgress {
+  id               Int      @id @default(autoincrement())
+  user_id          Int
+  learning_path_id Int
+  progress_percentage Int   @default(0)
+  completed        Boolean  @default(false)
+  last_accessed    DateTime @default(now()) @db.Timestamptz
+  created_at       DateTime @default(now()) @db.Timestamptz
+  updated_at       DateTime @default(now()) @db.Timestamptz
+  user             User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  learning_path    LearningPath @relation(fields: [learning_path_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, learning_path_id])
+  @@map("learning_path_progress")
+}
+
+model UserSolution {
+  id          Int      @id @default(autoincrement())
+  user_id     Int
+  exercise_id Int
+  code        String
+  is_correct  Boolean
+  created_at  DateTime @default(now()) @db.Timestamptz
+  updated_at  DateTime @default(now()) @db.Timestamptz
+  exercise    Exercise @relation(fields: [exercise_id], references: [id], onDelete: Cascade)
+
+  @@map("user_solutions")
+}
+
+model UserQuizAnswer {
+  id              Int      @id @default(autoincrement())
+  user_id         Int
+  quiz_question_id Int
+  selected_option Int
+  is_correct      Boolean
+  created_at      DateTime @default(now()) @db.Timestamptz
+  updated_at      DateTime @default(now()) @db.Timestamptz
+  quiz_question   QuizQuestion @relation(fields: [quiz_question_id], references: [id], onDelete: Cascade)
+
+  @@map("user_quiz_answers")
+}
