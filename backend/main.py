@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import pandas as pd
@@ -9,7 +10,7 @@ import os
 import json
 import uuid
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 # ML libraries
@@ -45,10 +46,21 @@ app.add_middleware(
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# In-memory storage for datasets and models (replace with database in production)
-datasets = {}
-models = {}
-jobs = {}
+# Import services
+from services.database_service import db_service
+from services.auth_service import auth_service
+
+# Import routes
+from routes.auth import router as auth_router
+from routes.roles import router as roles_router
+from routes.permissions import router as permissions_router
+from routes.users import router as users_router
+
+# Include routers - make sure auth router is properly included
+app.include_router(auth_router, prefix="")  # Remove prefix to match frontend expectations
+app.include_router(roles_router)
+app.include_router(permissions_router)
+app.include_router(users_router)
 
 # Data models
 class DatasetInfo(BaseModel):
@@ -140,20 +152,20 @@ async def upload_dataset(
             raise HTTPException(status_code=400, detail="Unsupported file format")
 
         # Create dataset info
-        dataset_info = DatasetInfo(
-            id=dataset_id,
-            name=name,
-            description=description,
-            file_path=file_path,
-            file_type=file_extension.lower()[1:],  # Remove the dot
-            row_count=len(df),
-            column_count=len(df.columns),
-            columns={col: str(df[col].dtype) for col in df.columns},
-            created_at=datetime.now(),
-        )
+        dataset_info = {
+            "id": dataset_id,
+            "name": name,
+            "description": description,
+            "file_path": file_path,
+            "file_type": file_extension.lower()[1:],  # Remove the dot
+            "row_count": len(df),
+            "column_count": len(df.columns),
+            "columns": {col: str(df[col].dtype) for col in df.columns},
+            "created_at": datetime.now(),
+        }
 
-        # Store dataset info
-        datasets[dataset_id] = dataset_info
+        # Store dataset info in database
+        db_service.save_dataset(dataset_info)
 
         return DatasetUploadResponse(
             dataset_id=dataset_id,
@@ -165,14 +177,15 @@ async def upload_dataset(
 
 @app.get("/datasets/{dataset_id}")
 async def get_dataset(dataset_id: str):
-    if dataset_id not in datasets:
+    dataset = db_service.get_dataset(dataset_id)
+    if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    return datasets[dataset_id]
+    return dataset
 
 @app.get("/datasets")
 async def list_datasets():
-    return list(datasets.values())
+    return db_service.list_datasets()
 
 # Sample dataset routes
 @app.get("/datasets/samples")
@@ -230,27 +243,32 @@ async def import_sample_dataset(dataset_id: str, project_id: Optional[str] = Non
         df.to_csv(file_path, index=False)
 
         # Create dataset info
-        dataset_info = DatasetInfo(
-            id=imported_dataset_id,
-            name=f"{sample_info['name']} (Sample)",
-            description=sample_info['description'],
-            file_path=file_path,
-            file_type="csv",
-            row_count=len(df),
-            column_count=len(df.columns),
-            columns={col: str(df[col].dtype) for col in df.columns},
-            created_at=datetime.now(),
-        )
+        dataset_info = {
+            "id": imported_dataset_id,
+            "name": f"{sample_info['name']} (Sample)",
+            "description": sample_info['description'],
+            "file_path": file_path,
+            "file_type": "csv",
+            "row_count": len(df),
+            "column_count": len(df.columns),
+            "columns": {col: str(df[col].dtype) for col in df.columns},
+            "created_at": datetime.now(),
+        }
 
-        # Store dataset info
-        datasets[imported_dataset_id] = dataset_info
+        # Store dataset info in database
+        db_service.save_dataset(dataset_info)
+
+        # If project_id is provided, associate dataset with project
+        if project_id:
+            # This would be implemented in a real application
+            pass
 
         return {
             "dataset_id": imported_dataset_id,
             "message": "Sample dataset imported successfully",
-            "name": dataset_info.name,
-            "row_count": dataset_info.row_count,
-            "column_count": dataset_info.column_count
+            "name": dataset_info["name"],
+            "row_count": dataset_info["row_count"],
+            "column_count": dataset_info["column_count"]
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -262,17 +280,16 @@ async def import_sample_dataset(dataset_id: str, project_id: Optional[str] = Non
 @app.post("/ml/train")
 async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
     try:
-        if request.dataset_id not in datasets:
+        # Get dataset from database
+        dataset_info = db_service.get_dataset(request.dataset_id)
+        if not dataset_info:
             raise HTTPException(status_code=404, detail="Dataset not found")
 
-        # Get dataset
-        dataset_info = datasets[request.dataset_id]
-
         # Load dataset
-        if dataset_info.file_type == "csv":
-            df = pd.read_csv(dataset_info.file_path)
-        elif dataset_info.file_type in ["xls", "xlsx"]:
-            df = pd.read_excel(dataset_info.file_path)
+        if dataset_info["file_type"] == "csv":
+            df = pd.read_csv(dataset_info["file_path"])
+        elif dataset_info["file_type"] in ["xls", "xlsx"]:
+            df = pd.read_excel(dataset_info["file_path"])
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format")
 
@@ -289,11 +306,11 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
 
         # Create job
         job_id = str(uuid.uuid4())
-        job_info = JobInfo(
-            id=job_id,
-            type="model_training",
-            status="pending",
-            params={
+        job_info = {
+            "id": job_id,
+            "type": "model_training",
+            "status": "pending",
+            "params": {
                 "dataset_id": request.dataset_id,
                 "model_type": request.model_type,
                 "target_column": request.target_column,
@@ -301,10 +318,11 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
                 "hyperparameters": request.hyperparameters,
                 "test_size": request.test_size
             },
-            created_at=datetime.now()
-        )
+            "created_at": datetime.now()
+        }
 
-        jobs[job_id] = job_info
+        # Save job to database
+        db_service.save_job(job_info)
 
         # Train model in background
         background_tasks.add_task(
@@ -327,10 +345,10 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
 @app.post("/ml/predict")
 async def predict(request: PredictionRequest):
     try:
-        if request.model_id not in models:
+        # Get model from database
+        model_info = db_service.get_model(request.model_id)
+        if not model_info:
             raise HTTPException(status_code=404, detail="Model not found")
-
-        model_info = models[request.model_id]
 
         # Load model
         from ml.model_predictor import model_predictor
@@ -345,30 +363,30 @@ async def predict(request: PredictionRequest):
 
 @app.get("/ml/models/{model_id}")
 async def get_model(model_id: str):
-    if model_id not in models:
+    model = db_service.get_model(model_id)
+    if not model:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    return models[model_id]
+    return model
 
 @app.get("/ml/models")
 async def list_models():
-    return list(models.values())
+    return db_service.list_models()
 
 # EDA routes
 @app.post("/eda/analyze")
 async def analyze_dataset(request: EDARequest):
     try:
-        if request.dataset_id not in datasets:
+        # Get dataset from database
+        dataset_info = db_service.get_dataset(request.dataset_id)
+        if not dataset_info:
             raise HTTPException(status_code=404, detail="Dataset not found")
 
-        # Get dataset
-        dataset_info = datasets[request.dataset_id]
-
         # Load dataset
-        if dataset_info.file_type == "csv":
-            df = pd.read_csv(dataset_info.file_path)
-        elif dataset_info.file_type in ["xls", "xlsx"]:
-            df = pd.read_excel(dataset_info.file_path)
+        if dataset_info["file_type"] == "csv":
+            df = pd.read_csv(dataset_info["file_path"])
+        elif dataset_info["file_type"] in ["xls", "xlsx"]:
+            df = pd.read_excel(dataset_info["file_path"])
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format")
 
@@ -389,17 +407,16 @@ async def analyze_dataset(request: EDARequest):
 @app.post("/ai/suggestions/data-insights")
 async def generate_data_insights(dataset_id: str = Form(...)):
     try:
-        if dataset_id not in datasets:
+        # Get dataset from database
+        dataset_info = db_service.get_dataset(dataset_id)
+        if not dataset_info:
             raise HTTPException(status_code=404, detail="Dataset not found")
 
-        # Get dataset
-        dataset_info = datasets[dataset_id]
-
         # Load dataset
-        if dataset_info.file_type == "csv":
-            df = pd.read_csv(dataset_info.file_path)
-        elif dataset_info.file_type in ["xls", "xlsx"]:
-            df = pd.read_excel(dataset_info.file_path)
+        if dataset_info["file_type"] == "csv":
+            df = pd.read_csv(dataset_info["file_path"])
+        elif dataset_info["file_type"] in ["xls", "xlsx"]:
+            df = pd.read_excel(dataset_info["file_path"])
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format")
 
@@ -408,10 +425,10 @@ async def generate_data_insights(dataset_id: str = Form(...)):
 
         # Generate dataset description
         dataset_description = f"""
-        Dataset: {dataset_info.name}
-        Rows: {dataset_info.row_count}
-        Columns: {dataset_info.column_count}
-        Column types: {json.dumps(dataset_info.columns)}
+        Dataset: {dataset_info["name"]}
+        Rows: {dataset_info["row_count"]}
+        Columns: {dataset_info["column_count"]}
+        Column types: {json.dumps(dataset_info["columns"])}
         """
 
         # Generate insights
@@ -430,17 +447,16 @@ async def generate_feature_engineering_suggestions(
     target_variable: str = Form(...)
 ):
     try:
-        if dataset_id not in datasets:
+        # Get dataset from database
+        dataset_info = db_service.get_dataset(dataset_id)
+        if not dataset_info:
             raise HTTPException(status_code=404, detail="Dataset not found")
 
-        # Get dataset
-        dataset_info = datasets[dataset_id]
-
         # Load dataset
-        if dataset_info.file_type == "csv":
-            df = pd.read_csv(dataset_info.file_path)
-        elif dataset_info.file_type in ["xls", "xlsx"]:
-            df = pd.read_excel(dataset_info.file_path)
+        if dataset_info["file_type"] == "csv":
+            df = pd.read_csv(dataset_info["file_path"])
+        elif dataset_info["file_type"] in ["xls", "xlsx"]:
+            df = pd.read_excel(dataset_info["file_path"])
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format")
 
@@ -465,14 +481,13 @@ async def generate_visualization_recommendations(
     analysis_goal: str = Form(...)
 ):
     try:
-        if dataset_id not in datasets:
+        # Get dataset from database
+        dataset_info = db_service.get_dataset(dataset_id)
+        if not dataset_info:
             raise HTTPException(status_code=404, detail="Dataset not found")
 
-        # Get dataset
-        dataset_info = datasets[dataset_id]
-
         # Generate variable types
-        variable_types = dataset_info.columns
+        variable_types = dataset_info["columns"]
 
         # Generate recommendations
         from ai.gemini_client import gemini_client
@@ -535,9 +550,16 @@ async def train_model_task(
     test_size: float = 0.2
 ):
     try:
+        # Get job from database
+        job_info = db_service.get_job(job_id)
+        if not job_info:
+            logger.error(f"Job not found: {job_id}")
+            return
+
         # Update job status
-        jobs[job_id].status = "running"
-        jobs[job_id].updated_at = datetime.now()
+        job_info["status"] = "running"
+        job_info["updated_at"] = datetime.now()
+        db_service.save_job(job_info)
 
         # Train model
         from ml.model_trainer import model_trainer
@@ -553,35 +575,43 @@ async def train_model_task(
 
         # Create model info
         model_id = result["model_id"]
-        model_info = ModelInfo(
-            id=model_id,
-            name=f"{model_type} for {target_column}",
-            dataset_id=jobs[job_id].params["dataset_id"],
-            model_type=model_type,
-            target_column=target_column,
-            feature_columns=feature_columns,
-            hyperparameters=hyperparameters,
-            metrics=result["metrics"],
-            status="trained",
-            created_at=datetime.now()
-        )
+        model_info = {
+            "id": model_id,
+            "name": f"{model_type} for {target_column}",
+            "dataset_id": job_info["params"]["dataset_id"],
+            "model_type": model_type,
+            "target_column": target_column,
+            "feature_columns": feature_columns,
+            "hyperparameters": hyperparameters,
+            "metrics": result["metrics"],
+            "status": "trained",
+            "created_at": datetime.now()
+        }
 
-        # Store model info
-        models[model_id] = model_info
+        # Store model info in database
+        db_service.save_model(model_info)
 
         # Update job status
-        jobs[job_id].status = "completed"
-        jobs[job_id].result = {
+        job_info["status"] = "completed"
+        job_info["result"] = {
             "model_id": model_id,
             "metrics": result["metrics"]
         }
-        jobs[job_id].updated_at = datetime.now()
+        job_info["updated_at"] = datetime.now()
+        db_service.save_job(job_info)
 
         logger.info(f"Model training completed: {model_id}")
     except Exception as e:
         logger.error(f"Error in model training task: {str(e)}")
 
-        # Update job status
-        jobs[job_id].status = "failed"
-        jobs[job_id].result = {"error": str(e)}
-        jobs[job_id].updated_at = datetime.now()
+        try:
+            # Get job from database
+            job_info = db_service.get_job(job_id)
+            if job_info:
+                # Update job status
+                job_info["status"] = "failed"
+                job_info["result"] = {"error": str(e)}
+                job_info["updated_at"] = datetime.now()
+                db_service.save_job(job_info)
+        except Exception as inner_e:
+            logger.error(f"Error updating job status: {str(inner_e)}")
